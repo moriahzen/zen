@@ -65,7 +65,8 @@ jobs:
 
       - name: Clone Repo
         run: |
-          git clone https://github.com/DownloaderZone/WZML-X.git
+          #git clone https://github.com/DownloaderZone/WZML-X.git
+          git clone https://github.com/SilentDemonSD/WZML-X.git
           cd WZML-X
           echo "repo_cloned=true" >> $GITHUB_ENV
 
