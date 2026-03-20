@@ -42,17 +42,20 @@ jobs:
           cd Docker-Leech
           
           # -------------------------------------------------------------
-          # HOTFIX: Force Docker to use an older, stable version of Python/Ubuntu
-          # to fix the Pyrogram "no current event loop" crash on Python 3.13
+          # HOTFIX: Manually inject the Python 3.13 Event Loop Fix 
+          # directly into the bot's source code before building the image.
           # -------------------------------------------------------------
-          echo "Patching Dockerfile to prevent Python 3.13 crash..."
-          sed -i 's/FROM python:3\.[0-9]*/FROM python:3.10/g' Dockerfile || true
-          sed -i 's/FROM python:latest/FROM python:3.10/g' Dockerfile || true
-          sed -i 's/FROM ubuntu:latest/FROM ubuntu:22.04/g' Dockerfile || true
-          sed -i 's/FROM ubuntu:24.04/FROM ubuntu:22.04/g' Dockerfile || true
+          echo "Patching Python code to support Python 3.13..."
           
-          # If the repo explicitly installs Python 3, force it to 3.10
-          sed -i 's/apt-get install -y python3 /apt-get install -y python3.10 /g' Dockerfile || true
+          if [ -f "bot/__init__.py" ]; then
+            echo "import asyncio" > temp_fix.py
+            echo "asyncio.set_event_loop(asyncio.new_event_loop())" >> temp_fix.py
+            cat bot/__init__.py >> temp_fix.py
+            mv temp_fix.py bot/__init__.py
+            echo "✅ Successfully patched bot/__init__.py!"
+          else
+            echo "⚠️ bot/__init__.py not found, skipping patch."
+          fi
           
           docker build -t cyber .
 
