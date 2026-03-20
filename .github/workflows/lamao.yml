@@ -36,16 +36,29 @@ jobs:
         env:
           TS_SOCKET: /tmp/tailscaled.sock
 
-      - name: Clone and Build
+      - name: Clone, Patch, and Build
         run: |
           git clone https://github.com/surya123-s/Docker-Leech.git
           cd Docker-Leech
+          
+          # -------------------------------------------------------------
+          # HOTFIX: Force Docker to use an older, stable version of Python/Ubuntu
+          # to fix the Pyrogram "no current event loop" crash on Python 3.13
+          # -------------------------------------------------------------
+          echo "Patching Dockerfile to prevent Python 3.13 crash..."
+          sed -i 's/FROM python:3\.[0-9]*/FROM python:3.10/g' Dockerfile || true
+          sed -i 's/FROM python:latest/FROM python:3.10/g' Dockerfile || true
+          sed -i 's/FROM ubuntu:latest/FROM ubuntu:22.04/g' Dockerfile || true
+          sed -i 's/FROM ubuntu:24.04/FROM ubuntu:22.04/g' Dockerfile || true
+          
+          # If the repo explicitly installs Python 3, force it to 3.10
+          sed -i 's/apt-get install -y python3 /apt-get install -y python3.10 /g' Dockerfile || true
+          
           docker build -t cyber .
 
       - name: Run Bot and Notification Loop
         run: |
           # 1. Start Docker in Detached mode with Host Networking
-          # Host networking ensures the bot uses the Tailscale IP/DNS correctly
           docker run -d \
             --name cyber-container \
             --network host \
@@ -73,7 +86,6 @@ jobs:
               ELAPSED=$(($(date +%s) - $START_TIME))
               PROGRESS=$((ELAPSED * 100 / 21600))
               
-              # Update status message every 60 seconds (better for API limits)
               UPDATE_MSG="✅ Bot Running...%0A⏱️ Uptime: $((ELAPSED/3600))h $(((ELAPSED%3600)/60))m%0A📊 Progress: $PROGRESS%"
               
               curl -s -X POST "https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/editMessageText" \
@@ -86,7 +98,6 @@ jobs:
           ) &
 
           # 3. Follow Docker logs in the FOREGROUND
-          # This keeps the GitHub Action alive and lets you see bot errors
           docker logs -f cyber-container
 
       - name: Cleanup
