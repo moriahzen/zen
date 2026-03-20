@@ -1,0 +1,118 @@
+name: Tailscale Server
+on:
+  workflow_dispatch: {}  # Manual trigger only
+  
+jobs:
+  run-tailscale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Enable IP Forwarding
+        run: |
+          sudo sysctl -w net.ipv4.ip_forward=1
+          sudo sysctl -w net.ipv6.conf.all.forwarding=1
+
+      - name: Start Tailscale
+        run: |
+          sudo tailscale up \
+            --authkey ${{ secrets.TAILSCALE_AUTHKEY }} \
+            --ssh \
+            --advertise-exit-node \
+            --hostname=git-leech \
+            --reset
+              
+      - name: Get Tailscale IP
+        id: tailscale
+        run: |
+          TS_IP=$(tailscale ip -4)
+          echo "TS_IP=$TS_IP" >> $GITHUB_ENV
+          echo "✅ Tailscale IP: $TS_IP"
+
+##############################   Docker Build + Run  ######################
+
+      - name: Clone Repo
+        run: |
+          git clone https://github.com/surya123-s/Docker-Leech.git
+          cd Docker-Leech
+          echo "repo_cloned=true" >> $GITHUB_ENV
+
+      - name: Build Docker Image
+        if: env.repo_cloned == 'true'
+        run: |
+          cd Docker-Leech
+          docker build -t cyber .
+
+      - name: Run Docker Container with Tailscale Network
+        if: env.repo_cloned == 'true'
+        run: |
+          mkdir -p ./cfg ./tools/linux/ffmpeg/x64
+          
+          # 🔴 FIX 1: Create a Docker network that can use Tailscale
+          docker network create tailnet || true
+          
+          # 🔴 FIX 2: Run container on host network OR with Tailscale sidecar
+          # Option A: Use host network (simplest for testing)
+          docker run -d \
+            --name cyber-container \
+            --network host \  # This lets container use host's Tailscale
+            -v ${{ github.workspace }}/cfg:/opt/JDownloader/cfg \
+            -v ${{ github.workspace }}/tools:/JDownloader/tools \
+            -e BOT_TOKEN="${{ secrets.BOT_TOKEN }}" \
+            -e OWNER_ID="${{ secrets.OWNER_ID }}" \
+            -e TELEGRAM_API="${{ secrets.TELEGRAM_API }}" \
+            -e LEECH_DUMP_CHAT="${{ secrets.LEECH_DUMP_CHAT }}" \
+            -e TELEGRAM_HASH="${{ secrets.TELEGRAM_HASH }}" \
+            -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            -e TAILSCALE_IP="${{ env.TS_IP }}" \  # Pass Tailscale IP to container
+            cyber
+          
+          # 🔴 FIX 3: Verify container can see Tailscale
+          echo "Checking container network:"
+          docker exec cyber-container ping -c 2 ${{ env.TS_IP }} || true
+
+      - name: Show Container Logs
+        run: |
+          echo "📋 Container Logs:"
+          docker logs cyber-container --tail 50
+          
+          echo "🌐 Tailscale Status:"
+          tailscale status
+          
+          echo "🔌 Container Network:"
+          docker inspect cyber-container | grep -A 10 "NetworkSettings"
+
+      - name: Keep Alive with Health Check
+        run: |
+          echo "🟢 Server is running on Tailscale IP: ${{ env.TS_IP }}"
+          echo "📍 Your bot should be accessible at: http://${{ env.TS_IP }}:8080 (if it has web interface)"
+          echo ""
+          
+          # Better keep-alive with health checks
+          for i in {360..1}; do
+            HOURS=$((i / 60))
+            MINUTES=$((i % 60))
+            
+            # Check if container is still running
+            if ! docker ps | grep -q cyber-container; then
+              echo "❌ Container stopped! Restarting..."
+              docker start cyber-container
+            fi
+            
+            # Optional: Check if bot is responding
+            curl -s -o /dev/null -w "Health check: %{http_code}\n" http://localhost:8080 || true
+            
+            echo -ne "\r\033[K⏱️  Time: ${HOURS}h ${MINUTES}m | 🌐 Status: $(tailscale status --json | jq -r '.Self.Online') | 🐳 Container: $(docker ps --format '{{.Status}}' | head -1)"
+            sleep 60
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker stop cyber-container || true
+          docker rm cyber-container || true
+          sudo tailscale down
