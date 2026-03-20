@@ -30,7 +30,8 @@ jobs:
             --authkey ${{ secrets.TAILSCALE_AUTHKEY }} \
             --advertise-exit-node \
             --hostname "github-runner-${GITHUB_RUN_ID}" \
-            --reset
+            --ssh \
+            --accept-dns=true
 
       - name: Save Start Time & Get IPs
         id: get_ip
